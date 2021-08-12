@@ -51,7 +51,8 @@ data.columns
 
 # %%
 var_used_4_current_hyp = ["datetime",'glucose','basal',
-       'CHO', 'insulin']
+       'CHO', 'insulin','basis_heart_rate', 'basis_gsr', 'basis_skin_temperature',
+       'basis_air_temperature', 'basis_steps']
 pid_to_remove1, pid_to_remove2 = col_to_check(var_used_4_current_hyp, dict1 = all_df_train_stage1, dict2 = all_df_test_stage1, dict3 = all_df_train_stage2, dict4 = all_df_test_stage2)
 valid_pid_stage1, valid_pid_stage2 = get_valid_df(pid_to_remove1 = pid_to_remove1, pid_to_remove2 = pid_to_remove2)
 
@@ -62,11 +63,16 @@ data
 
 
 # %%
-def resample(data, freq):
+def resample(data, freq): #TODO: new rule - consider the imputation logic as if i must try different resampling
         """
         :param data: dataframe
         :param freq: sampling frequency
         :return: resampled data between the the first day at 00:00:00 and the last day at 23:60-freq:00 at freq sample frequency
+        
+        sum impute 0 when missing value
+        mean impute nan when missing value
+        
+        
         """
         start = data.datetime.iloc[0].strftime('%Y-%m-%d') + " 00:00:00"
         end = datetime.strptime(data.datetime.iloc[-1].strftime('%Y-%m-%d'), "%Y-%m-%d") + timedelta(days=1) - timedelta(
@@ -74,7 +80,8 @@ def resample(data, freq):
         index = pd.period_range(start=start,
                                 end=end,
                                 freq=str(freq) + 'min').to_timestamp()
-        data = data.resample(str(freq) + 'min', on="datetime").agg({'glucose': np.mean,'basal': np.sum, 'CHO': np.sum,'insulin': np.sum})
+        data = data.resample(str(freq) + 'min', on="datetime").agg({'glucose': np.mean,'basal': np.mean, 'CHO': np.sum,'insulin': np.sum, 'basis_heart_rate': np.mean, 'basis_gsr': np.mean, 'basis_skin_temperature': np.mean,
+       'basis_air_temperature': np.mean, 'basis_steps': np.sum})
         data = data.reindex(index=index)
         data = data.reset_index()
         data = data.rename(columns={"index": "datetime"})
@@ -86,6 +93,7 @@ data_resampled = resample(data, 5)
 # %%
 def fill_na(df):
     df = df.copy(deep=True)
+    
     return df
 
 data_filled = fill_na(data_resampled)
@@ -99,7 +107,9 @@ def data_interpolation(df,method,order,limit):
     """
     df = df.copy(deep=True)
     df["glucose"].interpolate(method = "polynomial", order = 1, inplace = True, limit = 4)
-    
+    df["basis_gsr"].interpolate(method = "polynomial", order = 1, inplace = True, limit = 4)
+    df["basis_heart_rate"].interpolate(method = "polynomial", order = 1, inplace = True, limit = 4)
+    df["basis_skin_temperature"].interpolate(method = "polynomial", order = 1, inplace = True, limit = 4)   
     return df
 
 data_iterpolated = data_interpolation(data_filled, method = "polynomial", order = 1, limit = 4)
@@ -141,9 +151,10 @@ def mealZone2(df, before, after ):
 
 def feature_eng(df, mealzone = False):
     df = df.copy(deep=True) 
-    df = mealZone2(df, 8, 8)
     df = mealZone2(df, 0, 16)
-    df = mealZone2(df, -8, 24)# TODO: fix bug 
+    #df = mealZone2(df, -8, 24)# TODO: fix bug 
+    df['hour'] = df['datetime'].dt.hour
+    df['minute'] = df['datetime'].dt.minute
 
     return df
 
@@ -155,7 +166,7 @@ data_feature_added = feature_eng(data_iterpolated, mealzone = True)
 # %%
 def additional_manipulation(df):
     df = df.copy(deep=True)    
-    df['basal'].replace(to_replace=0, method='ffill', inplace = True)  
+    df['basal'].fillna( method='ffill', inplace = True)  
     return df
 data_manipulated = additional_manipulation(data_feature_added)
 data_manipulated.columns
@@ -168,7 +179,7 @@ data_manipulated.columns
 
 # %%
 
-data_sampled = create_samples_V2(data_manipulated,number_lags = 20,colonne_da_laggare=['basal', 'CHO','insulin', 'mealZone8-8','mealZone0-16', 'mealZone-8-24'],colonna_Y='glucose',pred_horizon=0)
+data_sampled = create_samples_V2(data_manipulated,number_lags = 12,colonne_da_laggare=[],colonna_Y='glucose',pred_horizon=0)
 data_sampled.dropna(inplace = True)
 data_sampled.drop('glucose_t', axis = 1, inplace = True)
 
@@ -188,7 +199,7 @@ def final_x_manipulation(df):
      pass
      return df
 x = final_x_manipulation(x)
-x
+x.columns
 
 # %% [markdown]
 # Processing function: 
@@ -197,7 +208,9 @@ x
 # %%
 def processing(data, vars):
     """
-    vars = list of vars
+    vars = list of vars of the current hypothesis
+    
+    
     """
     data = data[vars]
     data_resampled = resample(data, 5)
@@ -206,7 +219,9 @@ def processing(data, vars):
     data_feature_added = feature_eng(data_iterpolated, mealzone = True)
     data_manipulated = additional_manipulation(data_feature_added)
     
-    data_sampled = create_samples_V2(data_manipulated,number_lags = 20,colonne_da_laggare=['basal', 'CHO','insulin', 'mealZone8-8','mealZone0-16', 'mealZone-8-24'],colonna_Y='glucose',pred_horizon=0)
+    data_sampled = create_samples_V2(data_manipulated,number_lags = 0,colonne_da_laggare=['basal', 'CHO', 'insulin', 'basis_heart_rate',
+       'basis_gsr', 'basis_skin_temperature', 'basis_air_temperature',
+       'basis_steps', 'mealZone0-16', 'hour', 'minute'],colonna_Y='glucose',pred_horizon=0)
     data_sampled.drop('glucose_t', axis = 1, inplace = True)
     data_sampled.dropna(inplace = True)
 
@@ -430,10 +445,259 @@ def recursive_conglobate_get_single_result(include_in_tr = True, valid_pid_stage
 
 
 # %%
-res_y_ypred_tot2, acc_measure_df_tot2 = recursive_conglobate_get_single_result(include_in_tr = False, valid_pid_stage1 = valid_pid_stage1, valid_pid_stage2 = valid_pid_stage2)
+
+#experiment setup
+risultati = []
+for i in [2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30]:
+    def processing(data, vars):
+        """
+        vars = list of vars
+        """
+        data = data[vars]
+        data_resampled = resample(data, 5)
+        data_filled = fill_na(data_resampled)
+        data_iterpolated = data_interpolation(data_filled, method = "polynomial", order = 1, limit = 4)
+        data_feature_added = feature_eng(data_iterpolated, mealzone = True)
+        data_manipulated = additional_manipulation(data_feature_added)
+        
+        data_sampled = create_samples_V2(data_manipulated,number_lags = i,colonne_da_laggare=['basal', 'CHO', 'insulin', 'basis_heart_rate',
+           'basis_gsr', 'basis_skin_temperature', 'basis_air_temperature',
+           'basis_steps', 'mealZone0-16', 'hour', 'minute'],colonna_Y='glucose',pred_horizon=0)
+        data_sampled.drop('glucose_t', axis = 1, inplace = True)
+        data_sampled.dropna(inplace = True)
+    
+        x, y = extract_data(data_sampled, 0)
+        x = final_x_manipulation(x)
+        
+    
+        return x, y
+    
+    
+    
+    res_y_ypred_tot2, acc_measure_df_tot2 = recursive_conglobate_get_single_result(include_in_tr = False, valid_pid_stage1 = valid_pid_stage1, valid_pid_stage2 = valid_pid_stage2)
+    
+    risultati.append(acc_measure_df_tot2['rmse'].mean())
+# %%
+
+
+
+# %% [markdown]
+#experiment: given the variables listed below, see what is the influence of lagging all variables of n periods.
+
+# vars: 'basal_t', 'CHO_t', 'insulin_t', 'basis_heart_rate_t', 'basis_gsr_t',
+#       'basis_skin_temperature_t', 'basis_air_temperature_t', 'basis_steps_t',
+#       'mealZone0-16_t', 'hour_t', 'minute_t'
+
+# error measure acc_measure_df_tot2['rmse'].mean() (include_in_tr = False)
+
+# goal: can i get ~40 rmse?
+
+# n = [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30]
+# err = [62.073,62.033, 61.970,61.894,61.821,61.751,61.697,61.643,61.610,61.592,61.599,61.622,61.652,61.692,61.728,61.769,61.790,61.90588386098091,61.942797708253664,62.0236383456456,62.09158939797729,62.16508535646403,62.23932065366535,62.29116025720278,62.31366181763229,62.3977499808425,62.45356290217608,62.53219495620968,62.56722356450242,62.60939553293209,62.64062756203514] 
+
+# result: for this particular set of variables, the best lag is around 10 but the improvement is small
 
 
 # %%
-acc_measure_df_tot2
 
+#experiment setup
+
+def processing(data, vars):
+    """
+    vars = list of vars
+    """
+    data = data[vars]
+    data_resampled = resample(data, 5)
+    data_filled = fill_na(data_resampled)
+    data_iterpolated = data_interpolation(data_filled, method = "polynomial", order = 1, limit = 4)
+    data_feature_added = feature_eng(data_iterpolated, mealzone = True)
+    data_manipulated = additional_manipulation(data_feature_added)
+    
+    data_sampled = create_samples_V2(data_manipulated.loc[:,('basis_gsr','glucose','datetime')],number_lags = 0,colonne_da_laggare=[],colonna_Y='glucose',pred_horizon=0)
+    data_sampled.drop('glucose_t', axis = 1, inplace = True)
+    data_sampled.dropna(inplace = True)
+
+    x, y = extract_data(data_sampled, 0)
+    x = final_x_manipulation(x)
+    
+
+    return x, y
+
+
+
+res_y_ypred_tot2, acc_measure_df_tot2 = recursive_conglobate_get_single_result(include_in_tr = False, valid_pid_stage1 = valid_pid_stage1, valid_pid_stage2 = valid_pid_stage2)
+
+acc_measure_df_tot2['rmse'].mean()
+
+
+# %% [markdown]
+#experiment: given the variables listed below, see what is the best subset.
+# here there is a focus on logic-driven hypothesis
+
+# vars: 'basal', 'CHO', 'insulin', 'basis_heart_rate', 'basis_gsr',
+#       'basis_skin_temperature', 'basis_air_temperature', 'basis_steps',
+#       'mealZone0-16_t', 'hour', 'minute'
+
+# error measure acc_measure_df_tot2['rmse'].mean() (include_in_tr = False)
+
+# goal: can i get ~40 rmse?
+
+# used = ["hour minute", "basis_heart_rate", "basis_gsr"]
+# result = [61.716, 62.180, 61.765]
+
+
+
+# %%
+#from http://www.science.smith.edu/~jcrouser/SDS293/labs/lab8-py.html
+#maybe there is other cool stuff there
+import itertools
+import time
+
+
+def processing(data, vars, feature_set):
+    """
+    vars = list of vars of the current hypothesis
+    
+    
+    """
+    data = data[vars]
+    data_resampled = resample(data, 5)
+    data_filled = fill_na(data_resampled)
+    data_iterpolated = data_interpolation(data_filled, method = "polynomial", order = 1, limit = 4)
+    data_feature_added = feature_eng(data_iterpolated, mealzone = True)
+    data_manipulated = additional_manipulation(data_feature_added)
+    
+    data_sampled = create_samples_V2(data_manipulated.loc[:,('datetime','glucose')+tuple(feature_set)],number_lags = 0,colonne_da_laggare=[],colonna_Y='glucose',pred_horizon=0)
+    data_sampled.drop('glucose_t', axis = 1, inplace = True)
+    data_sampled.dropna(inplace = True)
+
+    x, y = extract_data(data_sampled, 0)
+    x = final_x_manipulation(x)
+    
+
+    return x, y
+
+
+
+def recursive_conglobate_get_single_result_subset_selection(feature_set, include_in_tr = True, valid_pid_stage1 = valid_pid_stage1, valid_pid_stage2 = valid_pid_stage2, valid_vars = var_used_4_current_hyp): #TODO: fix warning
+    """
+    for pid n, train the algorithm on all training and test data of the other n - 1.
+    if include in training = True, the training data is n is used for training, otherwise
+    all train and test data are used for testing
+
+    result are given separately for each and every pid
+    """
+    res_y_ypred_tot = pd.DataFrame(columns = ['ytest', 'pred'])
+    acc_measure_df_tot = pd.DataFrame()
+    sogg = valid_pid_stage1 + valid_pid_stage2
+    for num in sogg:
+        group = [x for x in sogg if x != str(num)]
+        # num = left out subject
+        xtr = pd.DataFrame()
+        ytr = pd.Series()
+        for i in group:
+            if i in valid_pid_stage1:
+                data = all_df_train_stage1.get(i)
+                xtrain, ytrain = processing(data , valid_vars, feature_set)
+                xtr = xtr.append(xtrain)
+                ytr = ytr.append(ytrain, ignore_index=True)
+                data = all_df_test_stage1.get(i)
+                xtrain, ytrain = processing(data , valid_vars, feature_set)
+                xtr = xtr.append(xtrain)
+                ytr = ytr.append(ytrain, ignore_index=True)
+            else:
+                data = all_df_train_stage2.get(i)
+                xtrain, ytrain = processing(data , valid_vars, feature_set)
+                xtr = xtr.append(xtrain)
+                ytr = ytr.append(ytrain, ignore_index=True)
+                data = all_df_test_stage2.get(i)
+                xtrain, ytrain = processing(data , valid_vars, feature_set)
+                xtr = xtr.append(xtrain)
+                ytr = ytr.append(ytrain, ignore_index=True)
+        if include_in_tr == False:
+            if num in valid_pid_stage1:
+                xte = pd.DataFrame()
+                yte = pd.Series()
+                data = all_df_train_stage1.get(num)
+                xtrain, ytrain = processing(data , valid_vars, feature_set)
+                xte = xte.append(xtrain)
+                yte = yte.append(ytrain, ignore_index=True)
+                data = all_df_test_stage1.get(num)
+                xtrain, ytrain = processing(data , valid_vars, feature_set)
+                xte = xte.append(xtrain)
+                yte = yte.append(ytrain, ignore_index=True)
+            else:
+                xte = pd.DataFrame()
+                yte = pd.Series()
+                data = all_df_train_stage2.get(num)
+                xtrain, ytrain = processing(data , valid_vars, feature_set)
+                xte = xte.append(xtrain)
+                yte = yte.append(ytrain, ignore_index=True)
+                data = all_df_test_stage2.get(num)
+                xtrain, ytrain = processing(data , valid_vars, feature_set)
+                xte = xte.append(xtrain)
+                yte = yte.append(ytrain, ignore_index=True)
+        else:
+            if num in valid_pid_stage1:
+                data = all_df_train_stage1.get(num)
+                xtrain, ytrain = processing(data , valid_vars, feature_set)
+                xtr = xtr.append(xtrain)
+                ytr = ytr.append(ytrain, ignore_index=True)
+                data = all_df_test_stage1.get(num)
+                xte, yte = processing(data , valid_vars, feature_set)
+            else:
+                data = all_df_train_stage2.get(num)
+                xtrain, ytrain = processing(data , valid_vars, feature_set)
+                xtr = xtr.append(xtrain)
+                ytr = ytr.append(ytrain, ignore_index=True)
+                data = all_df_test_stage2.get(num)
+                xte, yte = processing(data , valid_vars, feature_set)
+        
+        res_y_ypred, acc_measure_df = modelling(xtr, xte, ytr, yte, str(num))
+        res_y_ypred_tot = res_y_ypred_tot.append(res_y_ypred)
+        acc_measure_df_tot = pd.concat([acc_measure_df_tot, acc_measure_df], axis = 0)
+    #acc_measure_df_tot.columns = sogg
+    acc_measure_df_tot.index = sogg
+    #for some reason 0 are imputed instead of nans, correction:
+    #acc_measure_df_tot = acc_measure_df_tot.fillna(0)
+    return res_y_ypred_tot, acc_measure_df_tot
+
+
+
+def processSubset(feature_set):
+    
+        
+    __, acc_measure_df_tot2 = recursive_conglobate_get_single_result_subset_selection(feature_set = feature_set , include_in_tr = False, valid_pid_stage1 = valid_pid_stage1, valid_pid_stage2 = valid_pid_stage2)
+
+        
+    return {"vars":feature_set, "error":acc_measure_df_tot2['rmse'].mean()}
+
+
+#columns for search = data_manipulated.columns - 'glucose' and 'datetime'
+
+def getBest(k):
+    
+    tic = time.time()
+    results = []
+    columns_to_search = ['basal', 'CHO', 'insulin', 'basis_heart_rate',
+       'basis_gsr', 'basis_skin_temperature', 'basis_air_temperature',
+       'basis_steps', 'mealZone0-16', 'hour', 'minute']
+    
+    for combo in itertools.combinations(columns_to_search, k):
+        results.append(processSubset(combo))
+    
+    # Wrap everything up in a nice dataframe
+    models = pd.DataFrame(results)
+    
+    # Choose the model with the highest RSS
+    best_model = models.loc[models['error'].argmin()]
+    
+    toc = time.time()
+    print("Processed", models.shape[0], "models on", k, "predictors in", (toc-tic), "seconds.")
+    
+    # Return the best model, along with some other useful information about the model
+    return best_model, models
+
+
+best, df_result = getBest(5)
 
